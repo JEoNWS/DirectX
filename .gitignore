@@ -1,0 +1,19 @@
+# IDE
+.idea/
+.vs/
+.serena/
+*.user
+*.suo
+
+# Build output
+x64/
+[Dd]ebug/
+[Rr]elease/
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.cso
+
+# Render output
+*.ppm
