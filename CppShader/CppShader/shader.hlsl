@@ -1,10 +1,15 @@
 struct VSInput  { float3 pos : POSITION; };
 struct VSOutput { float4 pos : SV_POSITION; };
 
+cbuffer CBTransform : register(b0) // C++의 슬롯 0과 대응
+{
+    row_major float4x4 wvp;
+};
+
 VSOutput VSMain(VSInput input)
 {
     VSOutput output;
-    output.pos = float4(input.pos, 1.0f);
+    output.pos = mul(float4(input.pos, 1.0f), wvp);
     return output;
 }
 

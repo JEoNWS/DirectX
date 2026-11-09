@@ -3,7 +3,9 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <d3dcompiler.h>
+#include <DirectXMath.h>
 #include <stdio.h>
+#include <chrono>
 
 #include "data.h"
 
@@ -12,6 +14,7 @@
 #pragma comment(lib, "d3d11.lib")
 
 using Microsoft::WRL::ComPtr;
+using namespace DirectX;
 
 // 루프 동안 살아 있어야 하는 D3D 장치 객체들
 struct Graphics
@@ -29,6 +32,31 @@ struct TriangleResources
     ComPtr<ID3D11VertexShader> vertexShader;
     ComPtr<ID3D11PixelShader>  pixelShader;
     ComPtr<ID3D11InputLayout>  inputLayout;
+};
+
+struct CBTransform
+{
+    XMFLOAT4X4 wvp;
+};
+
+struct Camera
+{
+    XMFLOAT3 position = { 1.0f, 0.0f, -3.0f };
+    XMFLOAT3 target = { 1.0f, 0.0f, 0.0f };
+    float fovY = XMConvertToDegrees(60.0f);
+    float aspect = 1280.0f / 720.0f;
+    float nearZ = 0.1f;
+    float farZ = 100.0f;
+    
+    XMMATRIX View() const
+    {
+        return XMMatrixLookAtLH(XMLoadFloat3(&position), XMLoadFloat3(&target), XMVectorSet(0, 1, 0, 0));
+    }
+    
+    XMMATRIX Projection() const
+    {
+        return XMMatrixPerspectiveFovLH(fovY, aspect, nearZ, farZ);
+    }
 };
 
 void LogPipelineState(ID3D11DeviceContext* ctx)   // ctx: 이미 만든 컨텍스트를 인자로 받음
@@ -259,7 +287,7 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
 
     context->VSSetShader(tri.vertexShader.Get(), nullptr, 0);
     context->PSSetShader(tri.pixelShader.Get(), nullptr, 0);
-
+    
     return S_OK;
 }
 
@@ -279,9 +307,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
     hr = SetUpTriangle(gfx.device.Get(), gfx.context.Get(), tri);
     if (FAILED(hr))
         return 1;
+    
+    ComPtr<ID3D11Buffer> cbTransform;
+    D3D11_BUFFER_DESC desc{};
+    desc.ByteWidth = sizeof(CBTransform);
+    desc.Usage = D3D11_USAGE_DYNAMIC;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    hr = gfx.device->CreateBuffer(&desc, nullptr, cbTransform.GetAddressOf());
+    
+    if (FAILED(hr))
+        return hr;
 
+    Camera camera;
+    
     MSG message{};
     bool isRunning = true;
+    const auto startTime = std::chrono::steady_clock::now();   // 회전 각도 계산용 시작 시각
     while (isRunning)
     {
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
@@ -328,9 +370,25 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             spaceHeld ? 0.0f : 0.05f,
             1.0f
         };
+        
+        // 이번 단계에서는 카메라 값을 코드에 고정해서 써요 (단계 B에서 카메라로 분리)
+        // 프로그램 시작 후 흐른 시간(초)
+        const float totalTime = std::chrono::duration<float>(std::chrono::steady_clock::now() - startTime).count();
+
+        XMMATRIX world = XMMatrixRotationY(totalTime);
+        
+        CBTransform cb;
+        XMStoreFloat4x4(&cb.wvp, world * camera.View() * camera.Projection());   // 곱셈 순서 주의, 아래 설명
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        gfx.context->Map(cbTransform.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        memcpy(mapped.pData, &cb, sizeof(cb));
+        gfx.context->Unmap(cbTransform.Get(), 0);
 
         gfx.context->ClearRenderTargetView(gfx.rtv.Get(), background);
         LogPipelineState(gfx.context.Get());
+        
+        gfx.context->VSSetConstantBuffers(0, 1, cbTransform.GetAddressOf()); // 슬롯 b0
+        
         gfx.context->Draw(3, 0);
 
         hr = gfx.swapChain->Present(1, 0);
