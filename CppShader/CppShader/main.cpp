@@ -42,15 +42,22 @@ struct CBTransform
 struct Camera
 {
     XMFLOAT3 position = { 1.0f, 0.0f, -3.0f };
-    XMFLOAT3 target = { 1.0f, 0.0f, 0.0f };
-    float fovY = XMConvertToDegrees(60.0f);
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+    
+    float fovY = XMConvertToRadians(60.0f);
     float aspect = 1280.0f / 720.0f;
     float nearZ = 0.1f;
     float farZ = 100.0f;
     
+    XMVECTOR Forward() const
+    {
+        return XMVectorSet(cosf(pitch) * sinf(yaw), sinf(pitch), cosf(pitch) * cosf(yaw), 0.0f);
+    }
+    
     XMMATRIX View() const
     {
-        return XMMatrixLookAtLH(XMLoadFloat3(&position), XMLoadFloat3(&target), XMVectorSet(0, 1, 0, 0));
+        return XMMatrixLookToLH(XMLoadFloat3(&position), Forward(), XMVectorSet(0, 1, 0, 0));
     }
     
     XMMATRIX Projection() const
@@ -291,6 +298,33 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
     return S_OK;
 }
 
+void CameraMovement(Camera& camera, POINT& lastMouse, float dt)
+{
+    const float speed = 2.0f;                // 초당 2 유닛
+    XMVECTOR pos   = XMLoadFloat3(&camera.position);
+    XMVECTOR fwd   = camera.Forward();
+    XMVECTOR right = XMVector3Normalize(XMVector3Cross(XMVectorSet(0, 1, 0, 0), fwd));  // 왼손 좌표계에서 오른쪽 방향
+
+    if (GetAsyncKeyState('W') & 0x8000) pos += fwd   * (speed * dt);
+    if (GetAsyncKeyState('S') & 0x8000) pos -= fwd   * (speed * dt);
+    if (GetAsyncKeyState('D') & 0x8000) pos += right * (speed * dt);
+    if (GetAsyncKeyState('A') & 0x8000) pos -= right * (speed * dt);
+
+    XMStoreFloat3(&camera.position, pos);
+    
+    POINT mouse;
+    GetCursorPos(&mouse);
+    if (GetAsyncKeyState(VK_RBUTTON) & 0x8000)
+    {
+        const float sensitivity = 0.0025f;   // 픽셀당 라디안
+        camera.yaw   += (mouse.x - lastMouse.x) * sensitivity;
+        camera.pitch -= (mouse.y - lastMouse.y) * sensitivity;   // 마우스를 내리면 아래를 봐요
+        camera.pitch = XMMax(XMMin(camera.pitch,  XMConvertToRadians(89.0f)),
+                                                  XMConvertToRadians(-89.0f));
+    }
+    lastMouse = mouse;                       // 버튼 안 눌러도 매 프레임 갱신
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
 {
     HWND window = nullptr;
@@ -324,6 +358,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
     MSG message{};
     bool isRunning = true;
     const auto startTime = std::chrono::steady_clock::now();   // 회전 각도 계산용 시작 시각
+    float prevTime = 0.0f; // 이전 프레임의 totalTime
+    POINT lastMouse {};
+    GetCursorPos(&lastMouse);
+    
     while (isRunning)
     {
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
@@ -375,16 +413,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         // 프로그램 시작 후 흐른 시간(초)
         const float totalTime = std::chrono::duration<float>(std::chrono::steady_clock::now() - startTime).count();
 
+        CameraMovement(camera, lastMouse, totalTime - prevTime);
+        prevTime = totalTime;
+        
         XMMATRIX world = XMMatrixRotationY(totalTime);
         
         CBTransform cb;
-        XMStoreFloat4x4(&cb.wvp, world * camera.View() * camera.Projection());   // 곱셈 순서 주의, 아래 설명
+        XMStoreFloat4x4(&cb.wvp, camera.View() * camera.Projection());   // 곱셈 순서 주의, 아래 설명
         D3D11_MAPPED_SUBRESOURCE mapped;
         gfx.context->Map(cbTransform.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
         memcpy(mapped.pData, &cb, sizeof(cb));
         gfx.context->Unmap(cbTransform.Get(), 0);
 
         gfx.context->ClearRenderTargetView(gfx.rtv.Get(), background);
+        
         LogPipelineState(gfx.context.Get());
         
         gfx.context->VSSetConstantBuffers(0, 1, cbTransform.GetAddressOf()); // 슬롯 b0
