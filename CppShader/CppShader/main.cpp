@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <chrono>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 #include "data.h"
 
 
@@ -23,6 +25,9 @@ struct Graphics
     ComPtr<ID3D11DeviceContext>    context;
     ComPtr<IDXGISwapChain>         swapChain;
     ComPtr<ID3D11RenderTargetView> rtv;
+    ComPtr<ID3D11Texture2D>        depthStencil;
+    ComPtr<ID3D11DepthStencilView> dsv;
+    ComPtr<ID3D11DepthStencilState> depthStencilState;
 };
 
 // 삼각형 그리기에 필요한 리소스들
@@ -32,6 +37,11 @@ struct TriangleResources
     ComPtr<ID3D11VertexShader> vertexShader;
     ComPtr<ID3D11PixelShader>  pixelShader;
     ComPtr<ID3D11InputLayout>  inputLayout;
+    ComPtr<ID3D11Buffer>       indexBuffer;
+    ComPtr<ID3D11RasterizerState> rasterizerState;
+    ComPtr<ID3D11Texture2D> texture;
+    ComPtr<ID3D11ShaderResourceView> textureSRV;
+    ComPtr<ID3D11SamplerState> samplerState;
 };
 
 struct CBTransform
@@ -220,6 +230,33 @@ HRESULT InitD3D(HWND window, Graphics& gfx)
     hr = gfx.device->CreateRenderTargetView(backBuffer.Get(), nullptr, gfx.rtv.GetAddressOf());
     if (FAILED(hr))
         return hr;
+    
+    D3D11_DEPTH_STENCIL_DESC dsDesc{};
+    dsDesc.DepthEnable    = TRUE;                          // 깊이 검사를 할까?
+    dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;   // 통과하면 깊이를 쓸까? (ALL / ZERO)
+    dsDesc.DepthFunc      = D3D11_COMPARISON_LESS;         // 어떤 비교로 통과시킬까?
+    dsDesc.StencilEnable  = FALSE;
+    
+    hr = gfx.device->CreateDepthStencilState(&dsDesc, gfx.depthStencilState.GetAddressOf());
+    if (FAILED(hr))
+        return hr;
+    
+    D3D11_TEXTURE2D_DESC depthDesc {};
+    depthDesc.Width = 1280;
+    depthDesc.Height = 720;
+    depthDesc.MipLevels = 1;
+    depthDesc.ArraySize = 1;
+    depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
+    depthDesc.SampleDesc.Count = 1;
+    depthDesc.Usage = D3D11_USAGE_DEFAULT;
+    depthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    
+    hr = gfx.device->CreateTexture2D(&depthDesc, nullptr, gfx.depthStencil.GetAddressOf());
+    if (FAILED(hr))
+        return hr;
+    hr = gfx.device->CreateDepthStencilView(gfx.depthStencil.Get(), nullptr, gfx.dsv.GetAddressOf());
+    if (FAILED(hr))
+        return hr;
 
     return S_OK;
 }
@@ -229,12 +266,54 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
 {
     Vertex vertices[] =
     {
-        {0.0f, 0.5f, 0.0f},
-        {0.5f, -0.5f, 0.0f},
-        {-0.5f, -0.5f, 0.0f},
+        // 앞 (z = -0.5)
+        {-0.5f,  0.5f, -0.5f,  0.0f, 0.0f},
+        { 0.5f,  0.5f, -0.5f,  1.0f, 0.0f},
+        { 0.5f, -0.5f, -0.5f,  1.0f, 1.0f},
+        {-0.5f, -0.5f, -0.5f,  0.0f, 1.0f},
+
+        // 뒤 (z = +0.5)
+        { 0.5f,  0.5f,  0.5f,  0.0f, 0.0f},
+        {-0.5f,  0.5f,  0.5f,  1.0f, 0.0f},
+        {-0.5f, -0.5f,  0.5f,  1.0f, 1.0f},
+        { 0.5f, -0.5f,  0.5f,  0.0f, 1.0f},
+
+        // 왼쪽 (x = -0.5)
+        {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f},
+        {-0.5f,  0.5f, -0.5f,  1.0f, 0.0f},
+        {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f},
+        {-0.5f, -0.5f,  0.5f,  0.0f, 1.0f},
+
+        // 오른쪽 (x = +0.5)
+        { 0.5f,  0.5f, -0.5f,  0.0f, 0.0f},
+        { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f},
+        { 0.5f, -0.5f,  0.5f,  1.0f, 1.0f},
+        { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f},
+
+        // 위 (y = +0.5)
+        {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f},
+        { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f},
+        { 0.5f,  0.5f, -0.5f,  1.0f, 1.0f},
+        {-0.5f,  0.5f, -0.5f,  0.0f, 1.0f},
+
+        // 아래 (y = -0.5)
+        { 0.5f, -0.5f,  0.5f,  0.0f, 0.0f},
+        {-0.5f, -0.5f,  0.5f,  1.0f, 0.0f},
+        {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f},
+        { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f},
     };
 
-    static_assert(sizeof(Vertex) == 12);
+    uint16_t indices[] =
+    {
+        0,  1,  2,    0,  2,  3,   // 앞
+        4,  5,  6,    4,  6,  7,   // 뒤
+        8,  9, 10,    8, 10, 11,   // 왼쪽
+       12, 13, 14,   12, 14, 15,   // 오른쪽
+       16, 17, 18,   16, 18, 19,   // 위
+       20, 21, 22,   20, 22, 23,   // 아래
+   };
+
+    static_assert(sizeof(Vertex) == 20);
     static_assert(offsetof(Vertex, x) == 0);
     static_assert(offsetof(Vertex, z) == 8);
 
@@ -280,21 +359,93 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
     D3D11_INPUT_ELEMENT_DESC inputElementDesc[] =
     {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Vertex, u), D3D11_INPUT_PER_VERTEX_DATA}
     };
     hr = device->CreateInputLayout(inputElementDesc, _countof(inputElementDesc), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), tri.inputLayout.GetAddressOf());
     if (FAILED(hr))
         return hr;
-
+    
+    D3D11_BUFFER_DESC indexBufferDesc {};
+    indexBufferDesc.ByteWidth = sizeof(indices);
+    indexBufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
+    indexBufferDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    
+    D3D11_SUBRESOURCE_DATA ibData{};
+    ibData.pSysMem = indices;
+    
+    hr = device->CreateBuffer(&indexBufferDesc, &ibData, tri.indexBuffer.GetAddressOf());
+    if (FAILED(hr))
+        return hr;
+    
     UINT stride = sizeof(Vertex);
     UINT offset = 0;
+    
+    D3D11_RASTERIZER_DESC rsDesc{};
+    rsDesc.FillMode              = D3D11_FILL_SOLID;
+    rsDesc.CullMode              = D3D11_CULL_BACK;
+    rsDesc.FrontCounterClockwise = FALSE;
+    rsDesc.DepthClipEnable       = TRUE;
+    
+    hr = device->CreateRasterizerState(&rsDesc, tri.rasterizerState.GetAddressOf());
+    if (FAILED(hr))
+        return hr;
+    
+    int w = 0, h = 0, channels = 0;                                 // 새 변수: 이미지 크기와 원래 채널 수를 받을 자리
+    unsigned char* data = stbi_load("texture.png", &w, &h, &channels, 4);  // 새 변수: 디코딩된 픽셀의 CPU 메모리 주소
+    
+    if (data == nullptr)
+    {
+        OutputDebugStringA(stbi_failure_reason());
+        return E_FAIL;
+    }
+    
+    D3D11_TEXTURE2D_DESC texDesc{};
+    texDesc.Width            = w;
+    texDesc.Height           = h;
+    texDesc.MipLevels        = 1;
+    texDesc.ArraySize        = 1;
+    texDesc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Usage            = D3D11_USAGE_IMMUTABLE;
+    texDesc.BindFlags        = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA texData{};
+    texData.pSysMem     = data;
+    texData.SysMemPitch = w * 4;     // 새로 등장하는 필드
+    
+    hr = device->CreateTexture2D(&texDesc, &texData, tri.texture.GetAddressOf());
+    if (FAILED(hr))
+        return hr;
+    
+    stbi_image_free(data);
+    
+    hr = device->CreateShaderResourceView(tri.texture.Get(), nullptr, tri.textureSRV.GetAddressOf()); 
+    if (FAILED(hr))
+        return hr;
+    
+    D3D11_SAMPLER_DESC sampDesc{};
+    sampDesc.Filter   = D3D11_FILTER_MIN_MAG_MIP_POINT;   // 일단 이걸로
+    sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sampDesc.MaxLOD   = D3D11_FLOAT32_MAX;
+    
+    hr = device->CreateSamplerState(&sampDesc, tri.samplerState.GetAddressOf());
+    if (FAILED(hr))
+        return hr;
 
     context->IASetInputLayout(tri.inputLayout.Get());
     context->IASetVertexBuffers(0, 1, tri.vertexBuffer.GetAddressOf(), &stride, &offset);
+    context->IASetIndexBuffer(tri.indexBuffer.Get(), DXGI_FORMAT_R16_UINT, 0);
     context->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->RSSetState(tri.rasterizerState.Get());
 
     context->VSSetShader(tri.vertexShader.Get(), nullptr, 0);
     context->PSSetShader(tri.pixelShader.Get(), nullptr, 0);
     
+    context->PSSetShaderResources(0, 1, tri.textureSRV.GetAddressOf());
+    context->PSSetSamplers(0, 1, tri.samplerState.GetAddressOf());
     return S_OK;
 }
 
@@ -388,7 +539,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
 
         // 플립 방식의 Present 이후에는 다시 연결해 줍니다.
         ID3D11RenderTargetView* targets[] = { gfx.rtv.Get() };
-        gfx.context->OMSetRenderTargets(1, targets, nullptr);
+        gfx.context->OMSetRenderTargets(1, targets, gfx.dsv.Get());
+        gfx.context->OMSetDepthStencilState(gfx.depthStencilState.Get(), 0);
 
         D3D11_VIEWPORT viewport{};
         viewport.TopLeftX = 0.0f;
@@ -404,7 +556,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
 
         const float background[] = {
             spaceHeld ? 1.0f : 0.0f,
-            spaceHeld ? 0.0f : 1.0f,
+            spaceHeld ? 0.0f : 0.0f,
             spaceHeld ? 0.0f : 0.05f,
             1.0f
         };
@@ -419,19 +571,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         XMMATRIX world = XMMatrixRotationY(totalTime);
         
         CBTransform cb;
-        XMStoreFloat4x4(&cb.wvp, camera.View() * camera.Projection());   // 곱셈 순서 주의, 아래 설명
+        XMStoreFloat4x4(&cb.wvp, world * camera.View() * camera.Projection());   // 곱셈 순서 주의, 아래 설명
         D3D11_MAPPED_SUBRESOURCE mapped;
         gfx.context->Map(cbTransform.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
         memcpy(mapped.pData, &cb, sizeof(cb));
         gfx.context->Unmap(cbTransform.Get(), 0);
 
         gfx.context->ClearRenderTargetView(gfx.rtv.Get(), background);
+        gfx.context->ClearDepthStencilView(gfx.dsv.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
         
         LogPipelineState(gfx.context.Get());
         
         gfx.context->VSSetConstantBuffers(0, 1, cbTransform.GetAddressOf()); // 슬롯 b0
         
-        gfx.context->Draw(3, 0);
+        gfx.context->DrawIndexed(36, 0, 0);
 
         hr = gfx.swapChain->Present(1, 0);
         if (FAILED(hr))
