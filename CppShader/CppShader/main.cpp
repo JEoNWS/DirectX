@@ -42,6 +42,8 @@ struct TriangleResources
     ComPtr<ID3D11Texture2D> texture;
     ComPtr<ID3D11ShaderResourceView> textureSRV;
     ComPtr<ID3D11SamplerState> samplerState;
+    ComPtr<ID3D11Texture2D> normalTexture;
+    ComPtr<ID3D11ShaderResourceView> normalTextureSRV;
 };
 
 struct CBTransform
@@ -271,44 +273,44 @@ HRESULT InitD3D(HWND window, Graphics& gfx)
 // 정점 버퍼 ~ 셰이더 ~ 입력 레이아웃 생성 후 파이프라인에 바인딩
 HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, TriangleResources& tri)
 {
-    Vertex vertices[] =
-    {
-        // 앞 (z = -0.5), N = (0,0,-1)
-        {-0.5f,  0.5f, -0.5f,  0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
-        { 0.5f,  0.5f, -0.5f,  1.0f, 0.0f,   0.0f, 0.0f, -1.0f},
-        { 0.5f, -0.5f, -0.5f,  1.0f, 1.0f,   0.0f, 0.0f, -1.0f},
-        {-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   0.0f, 0.0f, -1.0f},
+Vertex vertices[] =
+{
+    // 앞 (z=-0.5), N=(0,0,-1), T=(1,0,0)
+    {-0.5f,  0.5f, -0.5f,  0.0f, 0.0f,   0.0f, 0.0f, -1.0f,   1.0f, 0.0f, 0.0f},
+    { 0.5f,  0.5f, -0.5f,  1.0f, 0.0f,   0.0f, 0.0f, -1.0f,   1.0f, 0.0f, 0.0f},
+    { 0.5f, -0.5f, -0.5f,  1.0f, 1.0f,   0.0f, 0.0f, -1.0f,   1.0f, 0.0f, 0.0f},
+    {-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   0.0f, 0.0f, -1.0f,   1.0f, 0.0f, 0.0f},
 
-        // 뒤 (z = +0.5), N = (0,0,1)
-        { 0.5f,  0.5f,  0.5f,  0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
-        {-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   0.0f, 0.0f,  1.0f},
-        {-0.5f, -0.5f,  0.5f,  1.0f, 1.0f,   0.0f, 0.0f,  1.0f},
-        { 0.5f, -0.5f,  0.5f,  0.0f, 1.0f,   0.0f, 0.0f,  1.0f},
+    // 뒤 (z=+0.5), N=(0,0,1), T=(-1,0,0)
+    { 0.5f,  0.5f,  0.5f,  0.0f, 0.0f,   0.0f, 0.0f,  1.0f,  -1.0f, 0.0f, 0.0f},
+    {-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   0.0f, 0.0f,  1.0f,  -1.0f, 0.0f, 0.0f},
+    {-0.5f, -0.5f,  0.5f,  1.0f, 1.0f,   0.0f, 0.0f,  1.0f,  -1.0f, 0.0f, 0.0f},
+    { 0.5f, -0.5f,  0.5f,  0.0f, 1.0f,   0.0f, 0.0f,  1.0f,  -1.0f, 0.0f, 0.0f},
 
-        // 왼쪽 (x = -0.5), N = (-1,0,0)
-        {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
-        {-0.5f,  0.5f, -0.5f,  1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
-        {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f,  -1.0f, 0.0f, 0.0f},
-        {-0.5f, -0.5f,  0.5f,  0.0f, 1.0f,  -1.0f, 0.0f, 0.0f},
+    // 왼쪽 (x=-0.5), N=(-1,0,0), T=(0,0,-1)
+    {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
+    {-0.5f,  0.5f, -0.5f,  1.0f, 0.0f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
+    {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
+    {-0.5f, -0.5f,  0.5f,  0.0f, 1.0f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
 
-        // 오른쪽 (x = +0.5), N = (1,0,0)
-        { 0.5f,  0.5f, -0.5f,  0.0f, 0.0f,   1.0f, 0.0f, 0.0f},
-        { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
-        { 0.5f, -0.5f,  0.5f,  1.0f, 1.0f,   1.0f, 0.0f, 0.0f},
-        { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   1.0f, 0.0f, 0.0f},
+    // 오른쪽 (x=+0.5), N=(1,0,0), T=(0,0,1)
+    { 0.5f,  0.5f, -0.5f,  0.0f, 0.0f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
+    { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
+    { 0.5f, -0.5f,  0.5f,  1.0f, 1.0f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
+    { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
 
-        // 위 (y = +0.5), N = (0,1,0)
-        {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,   0.0f, 1.0f, 0.0f},
-        { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   0.0f, 1.0f, 0.0f},
-        { 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,   0.0f, 1.0f, 0.0f},
-        {-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,   0.0f, 1.0f, 0.0f},
+    // 위 (y=+0.5), N=(0,1,0), T=(1,0,0)
+    {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
+    { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
+    { 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
+    {-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
 
-        // 아래 (y = -0.5), N = (0,-1,0)
-        { 0.5f, -0.5f,  0.5f,  0.0f, 0.0f,   0.0f, -1.0f, 0.0f},
-        {-0.5f, -0.5f,  0.5f,  1.0f, 0.0f,   0.0f, -1.0f, 0.0f},
-        {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f,   0.0f, -1.0f, 0.0f},
-        { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   0.0f, -1.0f, 0.0f},
-    };
+    // 아래 (y=-0.5), N=(0,-1,0), T=(-1,0,0)
+    { 0.5f, -0.5f,  0.5f,  0.0f, 0.0f,   0.0f, -1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
+    {-0.5f, -0.5f,  0.5f,  1.0f, 0.0f,   0.0f, -1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
+    {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f,   0.0f, -1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
+    { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   0.0f, -1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
+};
 
     uint16_t indices[] =
     {
@@ -320,10 +322,11 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
        20, 21, 22,   20, 22, 23,   // 아래
    };
 
-    static_assert(sizeof(Vertex) == 32);
+    static_assert(sizeof(Vertex) == 44);
     static_assert(offsetof(Vertex, x) == 0);
     static_assert(offsetof(Vertex, u) == 12);
     static_assert(offsetof(Vertex, nx) == 20);
+    static_assert(offsetof(Vertex, tx) == 32);
 
     D3D11_BUFFER_DESC bufferDesc {};
     bufferDesc.ByteWidth = sizeof(vertices);
@@ -369,6 +372,7 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Vertex, u), D3D11_INPUT_PER_VERTEX_DATA},
         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, nx), D3D11_INPUT_PER_VERTEX_DATA},
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, tx), D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
     hr = device->CreateInputLayout(inputElementDesc, _countof(inputElementDesc), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), tri.inputLayout.GetAddressOf());
     if (FAILED(hr))
@@ -443,6 +447,31 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
     hr = device->CreateSamplerState(&sampDesc, tri.samplerState.GetAddressOf());
     if (FAILED(hr))
         return hr;
+    
+    int nw = 0, nh = 0, nch = 0;
+    unsigned char* nData = stbi_load("normal.png", &nw, &nh, &nch, 4);
+    if (nData == nullptr) { OutputDebugStringA(stbi_failure_reason()); return E_FAIL; }
+
+    D3D11_TEXTURE2D_DESC nDesc{};
+    nDesc.Width            = nw;
+    nDesc.Height           = nh;
+    nDesc.MipLevels        = 1;
+    nDesc.ArraySize        = 1;
+    nDesc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;   // ← _SRGB 아님
+    nDesc.SampleDesc.Count = 1;
+    nDesc.Usage            = D3D11_USAGE_IMMUTABLE;
+    nDesc.BindFlags        = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA nInit{};
+    nInit.pSysMem     = nData;
+    nInit.SysMemPitch = nw * 4;
+
+    hr = device->CreateTexture2D(&nDesc, &nInit, tri.normalTexture.GetAddressOf());
+    stbi_image_free(nData);          // 복사된 뒤라 해제 가능 (D-4에서 확인한 내용)
+    if (FAILED(hr)) return hr;
+
+    hr = device->CreateShaderResourceView(tri.normalTexture.Get(), nullptr, tri.normalTextureSRV.GetAddressOf());
+    if (FAILED(hr)) return hr;
 
     context->IASetInputLayout(tri.inputLayout.Get());
     context->IASetVertexBuffers(0, 1, tri.vertexBuffer.GetAddressOf(), &stride, &offset);
@@ -454,6 +483,7 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
     context->PSSetShader(tri.pixelShader.Get(), nullptr, 0);
     
     context->PSSetShaderResources(0, 1, tri.textureSRV.GetAddressOf());
+    context->PSSetShaderResources(1, 1, tri.normalTextureSRV.GetAddressOf());   // t1
     context->PSSetSamplers(0, 1, tri.samplerState.GetAddressOf());
     return S_OK;
 }

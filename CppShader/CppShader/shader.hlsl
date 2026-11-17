@@ -1,8 +1,9 @@
-struct VSInput  { float3 pos : POSITION; float2 uv : TEXCOORD0; float3 normal : NORMAL; };
-struct VSOutput { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float3 normal : TEXCOORD1; float3 worldPos : TEXCOORD2;};
+struct VSInput  { float3 pos : POSITION; float2 uv : TEXCOORD0; float3 normal : NORMAL; float3 tangent : TANGENT; };
+struct VSOutput { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float3 normal : TEXCOORD1; float3 worldPos : TEXCOORD2; float3 tangent : TEXCOORD3; };
 
 Texture2D    gTex  : register(t0);   // 새 변수: SRV가 연결될 슬롯 t0
 SamplerState gSamp : register(s0);   // 새 변수: 샘플러가 연결될 슬롯 s0
+Texture2D gNormalTex : register(t1);   // C++ 슬롯 1과 대응. 샘플러는 gSamp(s0)를 그대로 사용
 
 cbuffer CBTransform : register(b0) // C++의 슬롯 0과 대응
 {
@@ -19,12 +20,21 @@ VSOutput VSMain(VSInput input)
     output.uv = input.uv;
     output.normal = mul(input.normal, world).xyz;
     output.worldPos = mul(float4(input.pos, 1.0f), world).xyz;
+    output.tangent = mul(float4(input.tangent, 0.0f), world).xyz;
     return output;
 }
 
 float4 PSMain(VSOutput input) : SV_Target
 {
-    float3 N = normalize(input.normal);                      // 월드 N (보간 뒤 길이가 1이 아닐 수 있어서 다시 정규화)
+    float3 raw = gNormalTex.Sample(gSamp, input.uv).rgb;   // 새 변수: 0~1로 읽힌 텍스처 색
+    float3 N0 = normalize(input.normal);
+    float3 T = normalize(input.tangent);
+    T = normalize(T - dot(T, N0) * N0);
+    float3 B = cross(N0, T);
+    
+    float3 nTS = raw * 2 - 1.0f;
+    float3 N = normalize(nTS.x * T + nTS.y * B + nTS.z * N0);
+    
     float3 L = normalize(-float3(-1.0f, -1.0f, 0.0f));       // 빛이 가는 방향 (-1,-1,0)의 반대 = 표면에서 광원 쪽
     float diffuse = max(dot(N, L), 0.0f);
     
