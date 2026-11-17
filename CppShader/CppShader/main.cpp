@@ -47,6 +47,9 @@ struct TriangleResources
 struct CBTransform
 {
     XMFLOAT4X4 wvp;
+    XMFLOAT4X4 world;   // 새 필드: 월드 행렬 (N을 월드 공간으로 바꾸는 데 쓰려고)
+    XMFLOAT3   cameraPos;   // 새 필드: 월드 공간 카메라 위치 (V 계산용)
+    float      pad;         // 상수 버퍼 크기를 16의 배수로 맞추는 패딩
 };
 
 struct Camera
@@ -227,7 +230,11 @@ HRESULT InitD3D(HWND window, Graphics& gfx)
     if (FAILED(hr))
         return hr;
 
-    hr = gfx.device->CreateRenderTargetView(backBuffer.Get(), nullptr, gfx.rtv.GetAddressOf());
+    D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};                 // 새 변수: RTV를 어떤 포맷/차원으로 만들지 지정
+    rtvDesc.Format        = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+    
+    hr = gfx.device->CreateRenderTargetView(backBuffer.Get(), &rtvDesc, gfx.rtv.GetAddressOf());
     if (FAILED(hr))
         return hr;
     
@@ -266,41 +273,41 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
 {
     Vertex vertices[] =
     {
-        // 앞 (z = -0.5)
-        {-0.5f,  0.5f, -0.5f,  0.0f, 0.0f},
-        { 0.5f,  0.5f, -0.5f,  1.0f, 0.0f},
-        { 0.5f, -0.5f, -0.5f,  1.0f, 1.0f},
-        {-0.5f, -0.5f, -0.5f,  0.0f, 1.0f},
+        // 앞 (z = -0.5), N = (0,0,-1)
+        {-0.5f,  0.5f, -0.5f,  0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
+        { 0.5f,  0.5f, -0.5f,  1.0f, 0.0f,   0.0f, 0.0f, -1.0f},
+        { 0.5f, -0.5f, -0.5f,  1.0f, 1.0f,   0.0f, 0.0f, -1.0f},
+        {-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   0.0f, 0.0f, -1.0f},
 
-        // 뒤 (z = +0.5)
-        { 0.5f,  0.5f,  0.5f,  0.0f, 0.0f},
-        {-0.5f,  0.5f,  0.5f,  1.0f, 0.0f},
-        {-0.5f, -0.5f,  0.5f,  1.0f, 1.0f},
-        { 0.5f, -0.5f,  0.5f,  0.0f, 1.0f},
+        // 뒤 (z = +0.5), N = (0,0,1)
+        { 0.5f,  0.5f,  0.5f,  0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
+        {-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   0.0f, 0.0f,  1.0f},
+        {-0.5f, -0.5f,  0.5f,  1.0f, 1.0f,   0.0f, 0.0f,  1.0f},
+        { 0.5f, -0.5f,  0.5f,  0.0f, 1.0f,   0.0f, 0.0f,  1.0f},
 
-        // 왼쪽 (x = -0.5)
-        {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f},
-        {-0.5f,  0.5f, -0.5f,  1.0f, 0.0f},
-        {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f},
-        {-0.5f, -0.5f,  0.5f,  0.0f, 1.0f},
+        // 왼쪽 (x = -0.5), N = (-1,0,0)
+        {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
+        {-0.5f,  0.5f, -0.5f,  1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
+        {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f,  -1.0f, 0.0f, 0.0f},
+        {-0.5f, -0.5f,  0.5f,  0.0f, 1.0f,  -1.0f, 0.0f, 0.0f},
 
-        // 오른쪽 (x = +0.5)
-        { 0.5f,  0.5f, -0.5f,  0.0f, 0.0f},
-        { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f},
-        { 0.5f, -0.5f,  0.5f,  1.0f, 1.0f},
-        { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f},
+        // 오른쪽 (x = +0.5), N = (1,0,0)
+        { 0.5f,  0.5f, -0.5f,  0.0f, 0.0f,   1.0f, 0.0f, 0.0f},
+        { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
+        { 0.5f, -0.5f,  0.5f,  1.0f, 1.0f,   1.0f, 0.0f, 0.0f},
+        { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   1.0f, 0.0f, 0.0f},
 
-        // 위 (y = +0.5)
-        {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f},
-        { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f},
-        { 0.5f,  0.5f, -0.5f,  1.0f, 1.0f},
-        {-0.5f,  0.5f, -0.5f,  0.0f, 1.0f},
+        // 위 (y = +0.5), N = (0,1,0)
+        {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,   0.0f, 1.0f, 0.0f},
+        { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   0.0f, 1.0f, 0.0f},
+        { 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,   0.0f, 1.0f, 0.0f},
+        {-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,   0.0f, 1.0f, 0.0f},
 
-        // 아래 (y = -0.5)
-        { 0.5f, -0.5f,  0.5f,  0.0f, 0.0f},
-        {-0.5f, -0.5f,  0.5f,  1.0f, 0.0f},
-        {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f},
-        { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f},
+        // 아래 (y = -0.5), N = (0,-1,0)
+        { 0.5f, -0.5f,  0.5f,  0.0f, 0.0f,   0.0f, -1.0f, 0.0f},
+        {-0.5f, -0.5f,  0.5f,  1.0f, 0.0f,   0.0f, -1.0f, 0.0f},
+        {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f,   0.0f, -1.0f, 0.0f},
+        { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   0.0f, -1.0f, 0.0f},
     };
 
     uint16_t indices[] =
@@ -313,9 +320,10 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
        20, 21, 22,   20, 22, 23,   // 아래
    };
 
-    static_assert(sizeof(Vertex) == 20);
+    static_assert(sizeof(Vertex) == 32);
     static_assert(offsetof(Vertex, x) == 0);
-    static_assert(offsetof(Vertex, z) == 8);
+    static_assert(offsetof(Vertex, u) == 12);
+    static_assert(offsetof(Vertex, nx) == 20);
 
     D3D11_BUFFER_DESC bufferDesc {};
     bufferDesc.ByteWidth = sizeof(vertices);
@@ -359,7 +367,8 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
     D3D11_INPUT_ELEMENT_DESC inputElementDesc[] =
     {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Vertex, u), D3D11_INPUT_PER_VERTEX_DATA}
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Vertex, u), D3D11_INPUT_PER_VERTEX_DATA},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, nx), D3D11_INPUT_PER_VERTEX_DATA},
     };
     hr = device->CreateInputLayout(inputElementDesc, _countof(inputElementDesc), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), tri.inputLayout.GetAddressOf());
     if (FAILED(hr))
@@ -404,7 +413,7 @@ HRESULT SetUpTriangle(ID3D11Device* device, ID3D11DeviceContext* context, Triang
     texDesc.Height           = h;
     texDesc.MipLevels        = 1;
     texDesc.ArraySize        = 1;
-    texDesc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
     texDesc.SampleDesc.Count = 1;
     texDesc.Usage            = D3D11_USAGE_IMMUTABLE;
     texDesc.BindFlags        = D3D11_BIND_SHADER_RESOURCE;
@@ -572,6 +581,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         
         CBTransform cb;
         XMStoreFloat4x4(&cb.wvp, world * camera.View() * camera.Projection());   // 곱셈 순서 주의, 아래 설명
+        XMStoreFloat4x4(&cb.world, world);
+        cb.cameraPos = camera.position;   // camera는 루프에서 이미 쓰는 Camera 객체
+        
         D3D11_MAPPED_SUBRESOURCE mapped;
         gfx.context->Map(cbTransform.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
         memcpy(mapped.pData, &cb, sizeof(cb));
