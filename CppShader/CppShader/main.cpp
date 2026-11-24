@@ -3,28 +3,15 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <d3dcompiler.h>
-#include <DirectXMath.h>
 #include <stdio.h>
 #include <chrono>
-#include <algorithm>
-#include <vector>   // 파일 맨 위에 추가
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
-#include "data.h"
-
+#include "mesh.h"
 
 #pragma comment(lib, "D3DCompiler.lib")
 #pragma comment(lib, "d3d11.lib")
-
-using Microsoft::WRL::ComPtr;
-using namespace DirectX;
-
-struct Mesh                               // 새 구조체: 메시 하나를 그리는 데 필요한 GPU 객체 묶음
-{
-    ComPtr<ID3D11Buffer> vb, ib;
-    UINT indexCount = 0;
-};
 
 // 루프 동안 살아 있어야 하는 D3D 장치 객체들
 struct Graphics
@@ -45,11 +32,9 @@ struct ShaderSet                          // 새 구조체: 한 파일에서 나
 };
 
 // 삼각형 그리기에 필요한 리소스들
-struct TriangleResources
+struct MeshResources
 {
-    ComPtr<ID3D11Buffer> vertexBuffer;
-    ComPtr<ID3D11Buffer> indexBuffer;
-    Mesh sphere, cube;
+    Mesh mesh;
     ShaderSet phong, pbr;
     ComPtr<ID3D11InputLayout>  inputLayout;
     ComPtr<ID3D11RasterizerState> rasterizerState;
@@ -326,150 +311,21 @@ HRESULT CreateShaderSet(ID3D11Device* device, const wchar_t* path,
     return S_OK;
 }
 
-// CPU 배열만 만든다. 아직 GPU 객체가 아니다.
-void GenerateSphere(std::vector<Vertex>& verts, std::vector<uint16_t>& idx, int stacks, int slices)
-{
-    for (int i = 0; i <= stacks; ++i)
-    {
-        float theta = XM_PI * i / stacks;                 // 위(0) → 아래(π)
-        for (int j = 0; j <= slices; ++j)
-        {
-            float phi = XM_2PI * j / slices;              // 한 바퀴
-            float x = sin(theta) * cos(phi);                            // sinθ·cosφ
-            float y = cos(theta);                                       // cosθ
-            float z = sin(theta) * sin(phi);                            // sinθ·sinφ
-
-            Vertex v{};
-            v.x = 0.5f * x;  v.y = 0.5f * y;  v.z = 0.5f * z;
-            v.u = (float)j / slices;  v.v = (float)i / stacks;
-            v.nx = x;  v.ny = y;  v.nz = z;
-            v.tx = -sinf(phi);  v.ty = 0.0f;  v.tz = cosf(phi);
-            verts.push_back(v);
-        }
-    }
-    for (int i = 0; i < stacks; ++i)
-        for (int j = 0; j < slices; ++j)
-        {
-            uint16_t a = (uint16_t)(i * (slices + 1) + j);
-            uint16_t b = (uint16_t)(a + slices + 1);
-            idx.insert(idx.end(), { a, (uint16_t)(a + 1), b,   (uint16_t)(a + 1), (uint16_t)(b + 1), b });
-        }
-}
-
-HRESULT CreateMesh(ComPtr<ID3D11Device> device, std::vector<Vertex>& verts, std::vector<uint16_t>& idx, Mesh& mesh)
-{
-    D3D11_BUFFER_DESC bufferDesc {};
-    bufferDesc.ByteWidth = verts.size() * (UINT)(sizeof(Vertex));
-    bufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
-    bufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    bufferDesc.CPUAccessFlags = 0;
-
-    D3D11_SUBRESOURCE_DATA initData {};
-    initData.pSysMem = verts.data();
-    
-    HRESULT hr = device->CreateBuffer(&bufferDesc, &initData, mesh.vb.GetAddressOf());
-    if (FAILED(hr))
-        return hr;
-    
-    D3D11_BUFFER_DESC indexBufferDesc {};
-    indexBufferDesc.ByteWidth = idx.size() * (UINT)(sizeof(uint16_t));
-    indexBufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
-    indexBufferDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-    
-    D3D11_SUBRESOURCE_DATA ibData{};
-    ibData.pSysMem = idx.data();
-    
-    hr = device->CreateBuffer(&indexBufferDesc, &ibData, mesh.ib.GetAddressOf());
-    if (FAILED(hr))
-        return hr;
-    
-    mesh.indexCount = (UINT)idx.size();                                // 여기서 채움
-    
-    return S_OK;
-}
-
 // 정점 버퍼 ~ 셰이더 ~ 입력 레이아웃 생성 후 파이프라인에 바인딩
-HRESULT SetUpMeshes(ID3D11Device* device, ID3D11DeviceContext* context, TriangleResources& tri)
+HRESULT SetUpMeshes(ID3D11Device* device, ID3D11DeviceContext* context, MeshResources& mesh)
 {
-Vertex vertices[] =
-{
-    // 앞 (z=-0.5), N=(0,0,-1), T=(1,0,0)
-    {-0.5f,  0.5f, -0.5f,  0.0f, 0.0f,   0.0f, 0.0f, -1.0f,   1.0f, 0.0f, 0.0f},
-    { 0.5f,  0.5f, -0.5f,  1.0f, 0.0f,   0.0f, 0.0f, -1.0f,   1.0f, 0.0f, 0.0f},
-    { 0.5f, -0.5f, -0.5f,  1.0f, 1.0f,   0.0f, 0.0f, -1.0f,   1.0f, 0.0f, 0.0f},
-    {-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   0.0f, 0.0f, -1.0f,   1.0f, 0.0f, 0.0f},
-
-    // 뒤 (z=+0.5), N=(0,0,1), T=(-1,0,0)
-    { 0.5f,  0.5f,  0.5f,  0.0f, 0.0f,   0.0f, 0.0f,  1.0f,  -1.0f, 0.0f, 0.0f},
-    {-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   0.0f, 0.0f,  1.0f,  -1.0f, 0.0f, 0.0f},
-    {-0.5f, -0.5f,  0.5f,  1.0f, 1.0f,   0.0f, 0.0f,  1.0f,  -1.0f, 0.0f, 0.0f},
-    { 0.5f, -0.5f,  0.5f,  0.0f, 1.0f,   0.0f, 0.0f,  1.0f,  -1.0f, 0.0f, 0.0f},
-
-    // 왼쪽 (x=-0.5), N=(-1,0,0), T=(0,0,-1)
-    {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
-    {-0.5f,  0.5f, -0.5f,  1.0f, 0.0f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
-    {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
-    {-0.5f, -0.5f,  0.5f,  0.0f, 1.0f,  -1.0f, 0.0f, 0.0f,   0.0f, 0.0f, -1.0f},
-
-    // 오른쪽 (x=+0.5), N=(1,0,0), T=(0,0,1)
-    { 0.5f,  0.5f, -0.5f,  0.0f, 0.0f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
-    { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
-    { 0.5f, -0.5f,  0.5f,  1.0f, 1.0f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
-    { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   1.0f, 0.0f, 0.0f,   0.0f, 0.0f,  1.0f},
-
-    // 위 (y=+0.5), N=(0,1,0), T=(1,0,0)
-    {-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
-    { 0.5f,  0.5f,  0.5f,  1.0f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
-    { 0.5f,  0.5f, -0.5f,  1.0f, 1.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
-    {-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, 0.0f},
-
-    // 아래 (y=-0.5), N=(0,-1,0), T=(-1,0,0)
-    { 0.5f, -0.5f,  0.5f,  0.0f, 0.0f,   0.0f, -1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
-    {-0.5f, -0.5f,  0.5f,  1.0f, 0.0f,   0.0f, -1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
-    {-0.5f, -0.5f, -0.5f,  1.0f, 1.0f,   0.0f, -1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
-    { 0.5f, -0.5f, -0.5f,  0.0f, 1.0f,   0.0f, -1.0f, 0.0f,  -1.0f, 0.0f, 0.0f},
-};
-
-    uint16_t indices[] =
-    {
-        0,  1,  2,    0,  2,  3,   // 앞
-        4,  5,  6,    4,  6,  7,   // 뒤
-        8,  9, 10,    8, 10, 11,   // 왼쪽
-       12, 13, 14,   12, 14, 15,   // 오른쪽
-       16, 17, 18,   16, 18, 19,   // 위
-       20, 21, 22,   20, 22, 23,   // 아래
-   };
-
-    static_assert(sizeof(Vertex) == 44);
-    static_assert(offsetof(Vertex, x) == 0);
-    static_assert(offsetof(Vertex, u) == 12);
-    static_assert(offsetof(Vertex, nx) == 20);
-    static_assert(offsetof(Vertex, tx) == 32);
-
-    D3D11_BUFFER_DESC bufferDesc {};
-    bufferDesc.ByteWidth = sizeof(vertices);
-    bufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
-    bufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    bufferDesc.CPUAccessFlags = 0;
-
-    D3D11_SUBRESOURCE_DATA initData {};
-    initData.pSysMem = vertices;
-    HRESULT hr = device->CreateBuffer(&bufferDesc, &initData, tri.vertexBuffer.GetAddressOf());
-    if (FAILED(hr))
-        return hr;
-
     ComPtr<ID3DBlob> layoutBlob;
     ShaderSet phong;
     ShaderSet pbr;
-    hr = CreateShaderSet(device, L"pbr.hlsl", pbr, layoutBlob.GetAddressOf());
+    HRESULT hr = CreateShaderSet(device, L"pbr.hlsl", pbr, layoutBlob.GetAddressOf());
     if (FAILED(hr))
         return hr;
-    tri.pbr = pbr;
+    mesh.pbr = pbr;
     
     hr = CreateShaderSet(device, L"phong.hlsl", phong);
     if (FAILED(hr))
         return hr;
-    tri.phong = phong;
+    mesh.phong = phong;
     
     D3D11_INPUT_ELEMENT_DESC inputElementDesc[] =
     {
@@ -478,19 +334,7 @@ Vertex vertices[] =
         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, nx), D3D11_INPUT_PER_VERTEX_DATA},
         { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, tx), D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
-    hr = device->CreateInputLayout(inputElementDesc, _countof(inputElementDesc), layoutBlob->GetBufferPointer(), layoutBlob->GetBufferSize(), tri.inputLayout.GetAddressOf());
-    if (FAILED(hr))
-        return hr;
-    
-    D3D11_BUFFER_DESC indexBufferDesc {};
-    indexBufferDesc.ByteWidth = sizeof(indices);
-    indexBufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
-    indexBufferDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-    
-    D3D11_SUBRESOURCE_DATA ibData{};
-    ibData.pSysMem = indices;
-    
-    hr = device->CreateBuffer(&indexBufferDesc, &ibData, tri.indexBuffer.GetAddressOf());
+    hr = device->CreateInputLayout(inputElementDesc, _countof(inputElementDesc), layoutBlob->GetBufferPointer(), layoutBlob->GetBufferSize(), mesh.inputLayout.GetAddressOf());
     if (FAILED(hr))
         return hr;
     
@@ -503,13 +347,12 @@ Vertex vertices[] =
     rsDesc.FrontCounterClockwise = FALSE;
     rsDesc.DepthClipEnable       = TRUE;
     
-    hr = device->CreateRasterizerState(&rsDesc, tri.rasterizerState.GetAddressOf());
+    hr = device->CreateRasterizerState(&rsDesc, mesh.rasterizerState.GetAddressOf());
     if (FAILED(hr))
         return hr;
     
     int w = 0, h = 0, channels = 0;                                 // 새 변수: 이미지 크기와 원래 채널 수를 받을 자리
     unsigned char* data = stbi_load("texture.png", &w, &h, &channels, 4);  // 새 변수: 디코딩된 픽셀의 CPU 메모리 주소
-    
     if (data == nullptr)
     {
         OutputDebugStringA(stbi_failure_reason());
@@ -530,13 +373,13 @@ Vertex vertices[] =
     texData.pSysMem     = data;
     texData.SysMemPitch = w * 4;     // 새로 등장하는 필드
     
-    hr = device->CreateTexture2D(&texDesc, &texData, tri.texture.GetAddressOf());
+    hr = device->CreateTexture2D(&texDesc, &texData, mesh.texture.GetAddressOf());
     if (FAILED(hr))
         return hr;
     
     stbi_image_free(data);
     
-    hr = device->CreateShaderResourceView(tri.texture.Get(), nullptr, tri.textureSRV.GetAddressOf()); 
+    hr = device->CreateShaderResourceView(mesh.texture.Get(), nullptr, mesh.textureSRV.GetAddressOf()); 
     if (FAILED(hr))
         return hr;
     
@@ -548,7 +391,7 @@ Vertex vertices[] =
     sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
     sampDesc.MaxLOD   = D3D11_FLOAT32_MAX;
     
-    hr = device->CreateSamplerState(&sampDesc, tri.samplerState.GetAddressOf());
+    hr = device->CreateSamplerState(&sampDesc, mesh.samplerState.GetAddressOf());
     if (FAILED(hr))
         return hr;
     
@@ -570,9 +413,10 @@ Vertex vertices[] =
     nInit.pSysMem     = nData;
     nInit.SysMemPitch = nw * 4;
 
-    hr = device->CreateTexture2D(&nDesc, &nInit, tri.normalTexture.GetAddressOf());
+    hr = device->CreateTexture2D(&nDesc, &nInit, mesh.normalTexture.GetAddressOf());
     stbi_image_free(nData);          // 복사된 뒤라 해제 가능 (D-4에서 확인한 내용)
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr)) 
+        return hr;
     
     const char* faceFiles[6] = { "cube_px.png", "cube_nx.png", "cube_py.png",
                              "cube_ny.png", "cube_pz.png", "cube_nz.png" };   // D3D11 면 순서: +X, -X, +Y, -Y, +Z, -Z
@@ -606,7 +450,7 @@ Vertex vertices[] =
         cubeInit[i].SysMemPitch = w * 4;                          // ← 직접 작성
     }
 
-    hr = device->CreateTexture2D(&cubeDesc, cubeInit, tri.cubeTex.GetAddressOf());
+    hr = device->CreateTexture2D(&cubeDesc, cubeInit, mesh.cubeTex.GetAddressOf());
     // HRESULT 검사 필요
     if (FAILED(hr))
         return hr;
@@ -619,11 +463,11 @@ Vertex vertices[] =
     cubeSrvDesc.TextureCube.MostDetailedMip = 0;
     cubeSrvDesc.TextureCube.MipLevels = 1;
 
-    hr = device->CreateShaderResourceView(tri.cubeTex.Get(), &cubeSrvDesc, tri.cubeSRV.GetAddressOf());
+    hr = device->CreateShaderResourceView(mesh.cubeTex.Get(), &cubeSrvDesc, mesh.cubeSRV.GetAddressOf());
     if (FAILED(hr))
         return hr;
     
-    hr = device->CreateShaderResourceView(tri.normalTexture.Get(), nullptr, tri.normalTextureSRV.GetAddressOf());
+    hr = device->CreateShaderResourceView(mesh.normalTexture.Get(), nullptr, mesh.normalTextureSRV.GetAddressOf());
     if (FAILED(hr)) return hr;
     
     uint16_t stack = 16;
@@ -631,24 +475,21 @@ Vertex vertices[] =
     std::vector<Vertex> vert;
     std::vector<uint16_t> ind;
     GenerateSphere(vert, ind, stack, slice);
-    hr = CreateMesh(device, vert, ind, tri.sphere);    
+    hr = CreateMesh(device, vert, ind, mesh.mesh);    
     if (FAILED(hr))
         return hr;
 
-    context->IASetInputLayout(tri.inputLayout.Get());
-    context->IASetVertexBuffers(0, 1, tri.sphere.vb.GetAddressOf(), &stride, &offset);
-    context->IASetIndexBuffer(tri.sphere.ib.Get(), DXGI_FORMAT_R16_UINT, 0);
+    context->IASetInputLayout(mesh.inputLayout.Get());
+    context->IASetVertexBuffers(0, 1, mesh.mesh.vb.GetAddressOf(), &stride, &offset);
+    context->IASetIndexBuffer(mesh.mesh.ib.Get(), DXGI_FORMAT_R16_UINT, 0);
     context->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    context->RSSetState(tri.rasterizerState.Get());
+    context->RSSetState(mesh.rasterizerState.Get());
 
-    context->VSSetShader(tri.phong.vs.Get(), nullptr, 0);
-    context->PSSetShader(tri.phong.ps.Get(), nullptr, 0);
+    context->PSSetShaderResources(0, 1, mesh.textureSRV.GetAddressOf());
+    context->PSSetShaderResources(1, 1, mesh.normalTextureSRV.GetAddressOf());   // t1
+    context->PSSetSamplers(0, 1, mesh.samplerState.GetAddressOf());
     
-    context->PSSetShaderResources(0, 1, tri.textureSRV.GetAddressOf());
-    context->PSSetShaderResources(1, 1, tri.normalTextureSRV.GetAddressOf());   // t1
-    context->PSSetSamplers(0, 1, tri.samplerState.GetAddressOf());
-    
-    context->PSSetShaderResources(2, 1, tri.cubeSRV.GetAddressOf());   // t2
+    context->PSSetShaderResources(2, 1, mesh.cubeSRV.GetAddressOf());   // t2
     return S_OK;
 }
 
@@ -673,8 +514,7 @@ void CameraMovement(Camera& camera, POINT& lastMouse, float dt)
         const float sensitivity = 0.0025f;   // 픽셀당 라디안
         camera.yaw   += (mouse.x - lastMouse.x) * sensitivity;
         camera.pitch -= (mouse.y - lastMouse.y) * sensitivity;   // 마우스를 내리면 아래를 봐요
-        camera.pitch = XMMax(XMMin(camera.pitch,  XMConvertToRadians(89.0f)),
-                                                  XMConvertToRadians(-89.0f));
+        camera.pitch = XMMax(XMMin(camera.pitch,  XMConvertToRadians(89.0f)), XMConvertToRadians(-89.0f));
     }
     lastMouse = mouse;                       // 버튼 안 눌러도 매 프레임 갱신
 }
@@ -691,8 +531,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
     if (FAILED(hr))
         return 1;
     
-    TriangleResources tri;
-    hr = SetUpMeshes(gfx.device.Get(), gfx.context.Get(), tri);
+    MeshResources mesh;
+    hr = SetUpMeshes(gfx.device.Get(), gfx.context.Get(), mesh);
     if (FAILED(hr))
         return 1;
     
@@ -830,21 +670,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         if (GetAsyncKeyState('3') & 0x8000) useSphere = false;
         if (GetAsyncKeyState('4') & 0x8000) useSphere = true;
         
-        const ShaderSet& cur = usePbr ? tri.pbr : tri.phong;  // 새 변수: 이번 프레임에 쓸 세트 (복사 아님, 참조)
+        const ShaderSet& cur = usePbr ? mesh.pbr : mesh.phong;  // 새 변수: 이번 프레임에 쓸 세트 (복사 아님, 참조)
         gfx.context->VSSetShader(cur.vs.Get(), nullptr, 0);
         gfx.context->PSSetShader(cur.ps.Get(), nullptr, 0);
         
         UINT stride = sizeof(Vertex), offset = 0;                 // 루프 안에서 새로 선언 (SetUpTriangle의 것과 별개 변수)
         if (useSphere)
         {
-            gfx.context->IASetVertexBuffers(0, 1, tri.sphere.vb.GetAddressOf(), &stride, &offset);
-            gfx.context->IASetIndexBuffer(tri.sphere.ib.Get(), DXGI_FORMAT_R16_UINT, 0);
-            gfx.context->DrawIndexed(tri.sphere.indexCount, 0, 0);
+            gfx.context->IASetVertexBuffers(0, 1, mesh.mesh.vb.GetAddressOf(), &stride, &offset);
+            gfx.context->IASetIndexBuffer(mesh.mesh.ib.Get(), DXGI_FORMAT_R16_UINT, 0);
+            gfx.context->DrawIndexed(mesh.mesh.indexCount, 0, 0);
         }
         else
         {
-            gfx.context->IASetVertexBuffers(0, 1, tri.vertexBuffer.GetAddressOf(), &stride, &offset);
-            gfx.context->IASetIndexBuffer(tri.indexBuffer.Get(), DXGI_FORMAT_R16_UINT, 0);
+            gfx.context->IASetVertexBuffers(0, 1, mesh.mesh.vb.GetAddressOf(), &stride, &offset);
+            gfx.context->IASetIndexBuffer(mesh.mesh.ib.Get(), DXGI_FORMAT_R16_UINT, 0);
             gfx.context->DrawIndexed(36, 0, 0);
         }
         
