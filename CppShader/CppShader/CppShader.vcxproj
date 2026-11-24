@@ -155,7 +155,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
-    <None Include="shader.hlsl" />
+    <None Include="pbr.hlsl" />
+    <None Include="phong.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="data.h" />

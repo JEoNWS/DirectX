@@ -13,6 +13,14 @@ cbuffer CBTransform : register(b0) // C++의 슬롯 0과 대응
     float  pad;
 };
 
+cbuffer CBMaterial : register(b1)
+{
+    float metallic;
+    float roughness;
+    float2 pad2;
+};
+TextureCube gEnv : register(t2);   // 새 변수: 큐브맵. Texture2D가 아니라 TextureCube
+
 VSOutput VSMain(VSInput input)
 {
     VSOutput output;
@@ -31,22 +39,22 @@ float4 PSMain(VSOutput input) : SV_Target
     float3 T = normalize(input.tangent);
     T = normalize(T - dot(T, N0) * N0);
     float3 B = cross(N0, T);
-    
+        
     float3 nTS = raw * 2 - 1.0f;
     float3 N = normalize(nTS.x * T + nTS.y * B + nTS.z * N0);
-    
+        
     float3 L = normalize(-float3(-1.0f, -1.0f, 0.0f));       // 빛이 가는 방향 (-1,-1,0)의 반대 = 표면에서 광원 쪽
     float diffuse = max(dot(N, L), 0.0f);
-    
+        
     float3 V = normalize(cameraPos - input.worldPos);   // 표면 점에서 카메라 쪽
     float3 R = reflect(-L, N);                          // 3-1의 R
     float shininess = 4.0f;
     float spec = 0.0f;
     if (diffuse > 0.0f)                                 // 빛이 닿는 면만
-        spec = pow(max(dot(R, V), 0.0f), shininess);
-    
+    spec = pow(max(dot(R, V), 0.0f), shininess);
+        
     float ambient = 0.1f;                                    // 빛이 안 닿는 면도 완전히 까맣지 않게 하는 최소 밝기
     float4 tex = gTex.Sample(gSamp, input.uv);
-    
+        
     return float4(tex.rgb * (ambient + diffuse) + spec, 1.0f);   // 하이라이트는 흰색
 }
