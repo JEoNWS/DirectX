@@ -59,7 +59,8 @@ struct CBMaterial
 {
     float metallic; 
     float roughness; 
-    float pad[2];
+    float useAlbedoTex;   // 새 필드: 1이면 texture.png 사용, 0이면 회색 상수
+    float useNormalMap;   // 새 필드: 1이면 노멀맵 사용, 0이면 메시 법선 그대로
 };  // 상수 버퍼는 16바이트 단위
 
 struct Camera
@@ -469,15 +470,6 @@ HRESULT SetUpMeshes(ID3D11Device* device, ID3D11DeviceContext* context, MeshReso
     
     hr = device->CreateShaderResourceView(mesh.normalTexture.Get(), nullptr, mesh.normalTextureSRV.GetAddressOf());
     if (FAILED(hr)) return hr;
-    
-    uint16_t stack = 16;
-    uint16_t slice = 32;
-    std::vector<Vertex> vert;
-    std::vector<uint16_t> ind;
-    GenerateSphere(vert, ind, stack, slice);
-    hr = CreateMesh(device, vert, ind, mesh.mesh);    
-    if (FAILED(hr))
-        return hr;
 
     context->IASetInputLayout(mesh.inputLayout.Get());
     context->IASetVertexBuffers(0, 1, mesh.mesh.vb.GetAddressOf(), &stride, &offset);
@@ -519,6 +511,16 @@ void CameraMovement(Camera& camera, POINT& lastMouse, float dt)
     lastMouse = mouse;                       // 버튼 안 눌러도 매 프레임 갱신
 }
 
+template <typename T>
+void UpdateCB(ID3D11DeviceContext* ctx, ID3D11Buffer* buf, const T& data)   // 새 함수: 상수 버퍼 내용 덮어쓰기
+{
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (FAILED(ctx->Map(buf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)))
+        return;
+    memcpy(m.pData, &data, sizeof(T));
+    ctx->Unmap(buf, 0);
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
 {
     HWND window = nullptr;
@@ -531,10 +533,25 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
     if (FAILED(hr))
         return 1;
     
-    MeshResources mesh;
-    hr = SetUpMeshes(gfx.device.Get(), gfx.context.Get(), mesh);
-    if (FAILED(hr))
-        return 1;
+    MeshResources sphere;
+    uint16_t stack = 16;
+    uint16_t slice = 32;
+    std::vector<Vertex> sphereVert;
+    std::vector<uint16_t> sphereIdx;
+    GenerateSphere(sphereVert, sphereIdx, stack, slice);
+    hr = CreateMesh(gfx.device, sphereVert, sphereIdx, sphere.mesh);
+    if (FAILED(hr)) return 1;
+    hr = SetUpMeshes(gfx.device.Get(), gfx.context.Get(), sphere);
+    if (FAILED(hr)) return 1;
+    
+    MeshResources cube;
+    std::vector<Vertex> cubeVert;
+    std::vector<uint16_t> cubeIdx;
+    GenerateCube(cubeVert, cubeIdx);
+    hr = CreateMesh(gfx.device, cubeVert, cubeIdx, cube.mesh);
+    if (FAILED(hr)) return 1;
+    hr = SetUpMeshes(gfx.device.Get(), gfx.context.Get(), cube);
+    if (FAILED(hr)) return 1;
     
     ComPtr<ID3D11Buffer> cbTransform;
     D3D11_BUFFER_DESC desc{};
@@ -548,7 +565,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         return hr;
 
     ComPtr<ID3D11Buffer> cbMaterial;                 // 새 변수: 재질 값을 담는 GPU 버퍼
-    CBMaterial mat{ 0.0f, 0.5f, {0, 0} };            // 새 변수: 초기 재질 (비금속, 중간 거칠기)
+    CBMaterial mat{ 0.0f, 0.5f, 1.0f, 1.0f};            // 새 변수: 초기 재질 (비금속, 중간 거칠기)
     
     D3D11_BUFFER_DESC matDesc{};
     matDesc.ByteWidth = sizeof(CBMaterial);
@@ -573,6 +590,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
     
     bool usePbr = false;                                  // 루프 밖: 지금 어느 쪽을 쓰는지 기억
     bool useSphere = false;
+    bool useGrid = false;
+    MeshResources curMesh = cube;
     
     while (isRunning)
     {
@@ -633,10 +652,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         XMStoreFloat4x4(&cb.wvp, world * camera.View() * camera.Projection());   // 곱셈 순서 주의, 아래 설명
         XMStoreFloat4x4(&cb.world, world);
         cb.cameraPos = camera.position;   // camera는 루프에서 이미 쓰는 Camera 객체
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        gfx.context->Map(cbTransform.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-        memcpy(mapped.pData, &cb, sizeof(cb));
-        gfx.context->Unmap(cbTransform.Get(), 0);
+        UpdateCB<CBTransform>(gfx.context.Get(), cbTransform.Get(), cb);
 
         gfx.context->ClearRenderTargetView(gfx.rtv.Get(), background);
         gfx.context->ClearDepthStencilView(gfx.dsv.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
@@ -648,10 +664,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         if (GetAsyncKeyState(VK_LEFT)  & 0x8000) mat.roughness -= 0.5f * dt;
         mat.metallic = max(0, min(1, mat.metallic)); // 0~1로 제한 (카메라 pitch 제한 코드와 같은 방식)
         mat.roughness = max(0, min(1, mat.roughness));
-        D3D11_MAPPED_SUBRESOURCE matMapped;             // cbTransform용 mapped와 이름이 겹치지 않게 별도 변수
-        gfx.context->Map(cbMaterial.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &matMapped);
-        memcpy(matMapped.pData, &mat, sizeof(mat));
-        gfx.context->Unmap(cbMaterial.Get(), 0);
+        UpdateCB<CBMaterial>(gfx.context.Get(), cbMaterial.Get(), mat);
+        
         // 지금 어떤 값인지 창 제목에 표시 (보고할 때 편해요)
         wchar_t title[128];
         swprintf_s(title, L"%s  metallic=%.2f  roughness=%.2f", usePbr ? L"PBR" : L"Phong", mat.metallic, mat.roughness);
@@ -666,26 +680,56 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         
         // 루프 안, DrawIndexed 전
         if (GetAsyncKeyState('1') & 0x8000) usePbr = false;
-        if (GetAsyncKeyState('2') & 0x8000) usePbr = true;        
-        if (GetAsyncKeyState('3') & 0x8000) useSphere = false;
-        if (GetAsyncKeyState('4') & 0x8000) useSphere = true;
+        if (GetAsyncKeyState('2') & 0x8000) usePbr = true;
+        if (GetAsyncKeyState('3') & 0x8000) { useGrid = false; useSphere = false; }
+        if (GetAsyncKeyState('4') & 0x8000) { useGrid = false; useSphere = true;  }
+        if (GetAsyncKeyState('5') & 0x8000) { useGrid = true; }
         
-        const ShaderSet& cur = usePbr ? mesh.pbr : mesh.phong;  // 새 변수: 이번 프레임에 쓸 세트 (복사 아님, 참조)
+        const float useTex = (GetAsyncKeyState('T') & 0x8000) ? 0.0f : 1.0f;   // T를 누르고 있는 동안 알베도 텍스처 끔
+        const float useNrm = (GetAsyncKeyState('N') & 0x8000) ? 0.0f : 1.0f;   // N을 누르고 있는 동안 노멀맵 끔
+        mat.useAlbedoTex = useTex;  mat.useNormalMap = useNrm;
+        
+        const ShaderSet& cur = usePbr ? curMesh.pbr : curMesh.phong;  // 새 변수: 이번 프레임에 쓸 세트 (복사 아님, 참조)
         gfx.context->VSSetShader(cur.vs.Get(), nullptr, 0);
         gfx.context->PSSetShader(cur.ps.Get(), nullptr, 0);
         
         UINT stride = sizeof(Vertex), offset = 0;                 // 루프 안에서 새로 선언 (SetUpTriangle의 것과 별개 변수)
-        if (useSphere)
+        if (useGrid)
         {
-            gfx.context->IASetVertexBuffers(0, 1, mesh.mesh.vb.GetAddressOf(), &stride, &offset);
-            gfx.context->IASetIndexBuffer(mesh.mesh.ib.Get(), DXGI_FORMAT_R16_UINT, 0);
-            gfx.context->DrawIndexed(mesh.mesh.indexCount, 0, 0);
+            gfx.context->IASetVertexBuffers(0, 1, sphere.mesh.vb.GetAddressOf(), &stride, &offset);
+            gfx.context->IASetIndexBuffer(sphere.mesh.ib.Get(), DXGI_FORMAT_R16_UINT, 0);
+
+            const int N = 5;                 // 5×5
+            const float spacing = 1.2f;      // 구 지름이 1.0이라 약간 띄움
+            const float mid = (N - 1) * 0.5f;           // 가운데 인덱스 = 2.0
+            
+            for (int row = 0; row < N; ++row)           // 세로 = roughness (위쪽이 매끈)
+                for (int col = 0; col < N; ++col)       // 가로 = metallic (왼쪽이 비금속)
+                {
+                    CBMaterial m{ col / (float)(N - 1),
+                        0.1f + 0.9f * row / (N - 1), mat.useAlbedoTex, mat.useNormalMap };                 // metallic: 0~1을 5단계, roughness: 0.1~1.0 5단계
+                    XMMATRIX w = XMMatrixTranslation((col - mid) * spacing, 
+                        (mid - row) * spacing, 0.0f); // 격자 중앙이 원점이 되게 (x는 col, y는 row 기준)
+
+                    CBTransform t;
+                    XMStoreFloat4x4(&t.wvp, w * camera.View() * camera.Projection());
+                    XMStoreFloat4x4(&t.world, w);
+                    t.cameraPos = camera.position;
+
+                    UpdateCB(gfx.context.Get(), cbTransform.Get(), t);
+                    UpdateCB(gfx.context.Get(), cbMaterial.Get(), m);
+                    gfx.context->DrawIndexed(sphere.mesh.indexCount, 0, 0);
+                }
         }
         else
         {
-            gfx.context->IASetVertexBuffers(0, 1, mesh.mesh.vb.GetAddressOf(), &stride, &offset);
-            gfx.context->IASetIndexBuffer(mesh.mesh.ib.Get(), DXGI_FORMAT_R16_UINT, 0);
-            gfx.context->DrawIndexed(36, 0, 0);
+            if (useSphere)
+                curMesh = sphere;
+            else
+                curMesh = cube;
+            gfx.context->IASetVertexBuffers(0, 1, curMesh.mesh.vb.GetAddressOf(), &stride, &offset);
+            gfx.context->IASetIndexBuffer(curMesh.mesh.ib.Get(), DXGI_FORMAT_R16_UINT, 0);
+            gfx.context->DrawIndexed(curMesh.mesh.indexCount, 0, 0);
         }
         
         hr = gfx.swapChain->Present(1, 0);

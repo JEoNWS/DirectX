@@ -17,7 +17,8 @@ cbuffer CBMaterial : register(b1)
 {
     float metallic;
     float roughness;
-    float2 pad2;
+    float useAlbedoTex;
+    float useNormalMap;
 };
 TextureCube gEnv : register(t2);   // 새 변수: 큐브맵. Texture2D가 아니라 TextureCube
 
@@ -41,7 +42,9 @@ float4 PSMain(VSOutput input) : SV_Target
     float3 B = cross(N0, T);
     
     float3 nTS = raw * 2 - 1.0f;
-    float3 N = normalize(nTS.x * T + nTS.y * B + nTS.z * N0);
+    
+    // 법선: 노멀맵 적용 전(메시 법선)과 적용 후를 useNormalMap으로 섞은 뒤 normalize
+    float3 N = normalize(lerp(N0, nTS.x * T + nTS.y * B + nTS.z * N0, useNormalMap));
     
     float3 L = normalize(-float3(-1.0f, -1.0f, 0.0f));       // 빛이 가는 방향 (-1,-1,0)의 반대 = 표면에서 광원 쪽
     
@@ -49,7 +52,8 @@ float4 PSMain(VSOutput input) : SV_Target
     float3 R = reflect(-L, N);                          // 3-1의 R
     float4 tex = gTex.Sample(gSamp, input.uv);
     
-    float3 albedo = gTex.Sample(gSamp, input.uv).rgb;
+    // 알베도: 텍스처 색과 회색 상수(0.8)를 useAlbedoTex로 섞기
+    float3 albedo = lerp(float3(0.8, 0.8, 0.8), tex, useAlbedoTex);    
     float3 F0 = lerp(0.04f, albedo, metallic);       // 3-4에서 한 식
     float3 H = normalize(L + V);                     // 새 변수: L과 V의 중간 방향
     float cosTheta = saturate(dot(H, V));
